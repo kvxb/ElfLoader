@@ -3,7 +3,7 @@
 ## Objecives
 
 * Practice working with virtual memory, memory protection, and manual relocation.
-* Understand the difference between different types of executables, like PIE, non-PIE, staticly-linked, etc.
+* Understand the difference between different types of executables, like PIE, non-PIE, statically-linked, etc.
 * Understand the stack layout expected by an executable, environment variables, auxiliary vector, command-line arguments, etc.
 
 ## Statement
@@ -21,7 +21,7 @@ Your loader must eventually support:
 The support code consists of three directories:
 
 * `src/` where you will create your sollution
-* `test/` contains the test suite and a Python script to verify your work
+* `test/` contains the test suite and a bash script to verify your work
 
 The test suite consists of source code files (`.c` and `.asm`), that will be compiled and then executed using your loader.
 You can use the `Makefile` to compile all test files.
@@ -57,7 +57,6 @@ or
 For this task, you will need to:
 
 * Open the file and map it somewhere in the memory
-* Validate the ELF file (parse the header, check that it is an ELF file)
 * Pass through the section headers, and for the `PT_LOAD` sections create new memory regions (they can have RWX permissions for now), then copy the section from the file into the newly created memory region.
 * Pass the execution to the new ELF, by jumping to the entry point.
 
@@ -95,7 +94,7 @@ The executable expects the stack layout as seen in the figure below:
 
 You can see more details about the stack [here](https://lwn.net/Articles/631631/).
 
-You will have to reserve a memory region large enough for the stack (you can use the maximum allowed stack size, using `getrlimit`, or you can use a harcoded value large enough to fit everything).
+You will have to reserve a memory region large enough for the stack (you can use the maximum allowed stack size, using `getrlimit`, or you can use a hardcoded value large enough to fit everything).
 After that, you need to copy the argc, argv and envp in the expected layout, then set up the auxv.
 
 **Note:** `argv` and `envp`, since they consist of strings, will be placed as the **pointer to the string** on the stack, not the string itself.
@@ -103,14 +102,14 @@ After that, you need to copy the argc, argv and envp in the expected layout, the
 
 #### argc, argv (5 points out of 30)
 
-The command line arguments must be placed first at the top of the stack, as seen in the picture above.
+The command-line arguments must be placed first at the top of the stack, as seen in the picture above.
 The loader can be used as `./elf_loader ./no-pie-exec arg1 arg2 arg3`.
 `arg1`, `arg2` and `arg3` must be placed on the stack for the loaded executable.
 `argc` will be also placed on the at the top of the stack.
 
 #### envp (5 points out of 30)
 
-The environment variables should be placed after the command line arguments.
+The environment variables should be placed after the command-line arguments.
 For this, you just have to copy everything from the `char **envp` array and place it on the stack.
 
 #### auxv (10 points out of 30)
@@ -134,7 +133,7 @@ The auvx must end with an `AT_NULL` key with a 0 value, so an auxv that sets `AT
 
 ![Auxv Example](./img/auxv-example.drawio.svg)
 
-__Note:__ Beware of the `AT_RANDOM` entry, the application will crash if you do not set it up properly.
+**Note:** Beware of the `AT_RANDOM` entry, the application will crash if you do not set it up properly.
 
 **Docs:**
 
@@ -153,7 +152,7 @@ __Note:__ Beware of the `AT_RANDOM` entry, the application will crash if you do 
 * Must still build a valid stack (`argc`, `argv`, `auxv`, etc.)
 * Handle relocation of entry point and program headers correctly.
 
-You will need to load all the segments at a random offset.
+You will need to load all the segments relative to a random base address
 Beware of the auxv entries, some of them will need to be adjusted to the offset.
 
 **Docs:**
@@ -169,7 +168,8 @@ Here are some useful tips and tools to debug your ELF loader:
 ### General Tips
 
 * **Start simple**: First test with a syscall-only ELF binary (e.g., `write` + `exit`).
-* **Use GDB**: Run `gdb ./elf_loader` and set breakpoints in the loader and inside the loaded ELF. You can use `add-symbol-file path-to-elf start-address` to debug the libc entry and the elf execution with debugging symbols.
+* **Use GDB**: Run `gdb ./elf_loader` and set breakpoints in the loader and inside the loaded ELF.
+  You can use `add-symbol-file path-to-elf start-address` to debug the libc entry and the elf execution with debugging symbols.
 * **Check memory layout**: Print segment addresses and protections. You can use `pmap $(pidof elf-loader)`
 * **Use PWNGDB**: Use [`PwnGDB`](https://github.com/pwndbg/pwndbg) or other similar plugins. They provide a lot of help during debugging.
 
@@ -303,7 +303,7 @@ Start              End                Offset             Perm Path
 ```
 
 Our current instruction is at address `0x401710`, which is inside a memory region allocated by `mmap` for the `no_pie` file, we can use `add-symbol-file`.
-`add-symbol-file` expects the **start address of the .text section**, so let's get that.
+`add-symbol-file` expects the **start address of the `.text` section**, so let's get that.
 
 ```bash
 $ readelf -S tests/snippets/no_pie
@@ -325,7 +325,7 @@ add symbol table from file "tests/snippets/no_pie" at
 Reading symbols from tests/snippets/no_pie...
 $  context
 ...
- →   0x401710 <_start+0000>    endbr64 
+ →   0x401710 <_start+0000>    endbr64
      0x401714 <_start+0004>    xor    ebp, ebp
      0x401716 <_start+0006>    mov    r9, rdx
      0x401719 <_start+0009>    pop    rsi
@@ -352,6 +352,14 @@ Also, if we look into the libc source code (you are not required to do this, you
 We did not set the `AT_RANDOM` value in our loader, so it's `NULL`, which is why it will crash with a `SEGV`.
 
 We set the `AT_RANDOM` value to a memory region pointing to random data, as the [man page](https://man7.org/linux/man-pages/man3/getauxval.3.html) says, the crash disappears, and the `no_pie` elf is loaded properly.
+
+## Running the Checker
+
+In order to check the assignment in an environment as similar to the one on Gitlab CI, you can run the checker, including linters with:
+
+```console
+student@so:~/.../assignments/elf-loader$ ./local.sh checker
+```
 
 ## Compilation Tips
 
