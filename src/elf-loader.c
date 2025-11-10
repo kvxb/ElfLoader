@@ -76,18 +76,16 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
         unsigned char p_write = (p_flags & 2) >> 1;
         unsigned char p_read = (p_flags & 4) >> 2;
         if (p_type == PT_LOAD) {
-            void *addr = mmap((void *)p_vaddr, p_memsz, (PROT_READ * 1) | (PROT_WRITE * 1 ) | (PROT_EXEC * 1), MAP_ANONYMOUS | MAP_PRIVATE, -1, 0); 
+            void *addr = mmap((void *)(p_vaddr & ~0xFFF), (p_memsz) + (p_vaddr & 0xFFF ), (PROT_READ * 1) | (PROT_WRITE * 1 ) | (PROT_EXEC * 1), MAP_ANONYMOUS | MAP_PRIVATE, -1, 0); 
             if(addr == MAP_FAILED) { 
                 printf("Failed\n"); 
                 exit(13);
             }
-            memcpy(addr, (unsigned char *)elf_contents + p_offset, p_filesz);
-            mprotect(addr, p_memsz, PROT_EXEC * p_execute | PROT_READ * p_read | PROT_WRITE * p_write);
+            memcpy(addr + (p_vaddr & 0xFFF), (unsigned char *)elf_contents + p_offset, p_filesz);
+            mprotect(addr, p_memsz + (p_paddr & 0XFFF), PROT_EXEC * p_execute | PROT_READ * p_read | PROT_WRITE * p_write);
         }
     }
-    printf("test\n");
     ((void (*)())(*((uint64_t *)((unsigned char *)elf_contents + 24))))();
-    printf("test\n");
 	/**
 	 * TODO: Load PT_LOAD segments
 	 * For minimal syscall-only binaries.
