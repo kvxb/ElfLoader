@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
+#include <stdint.h>
+#include <string.h>
 #define _GNU_SOURCE
 
 #include <stdio.h>
@@ -8,6 +10,8 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <fcntl.h>
+
+#define PT_LOAD 1
 
 void *map_elf(const char *filename)
 {
@@ -44,7 +48,46 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
 	 * Validate ELF magic bytes - "Not a valid ELF file" + exit code 3 if invalid.
 	 * Validate ELF class is 64-bit (ELFCLASS64) - "Not a 64-bit ELF" + exit code 4 if invalid.
 	 */
+    if (memcmp(elf_contents, "\177ELF", 4)) {
+        fprintf(stderr, "Not a valid ELF file\n");
+        exit(3);
+    }
 
+    if ((*((unsigned char *)elf_contents + 4)) != 2) {
+        fprintf(stderr, "Not a 64-bit ELF\n");
+        exit(4);
+    }
+
+    uint64_t e_phoff = *((uint64_t *)((unsigned char *)elf_contents + 32));
+    uint16_t e_phentsize = *((uint16_t *)((unsigned char *)elf_contents + 54)); 
+    uint16_t e_phnum = *((uint16_t *)((unsigned char *)elf_contents + 56));
+    for (uint64_t i = e_phoff; i < e_phoff + e_phentsize * e_phnum; i += e_phentsize) {
+
+        uint32_t p_type = *(uint32_t *)((unsigned char *)elf_contents + i + 0);
+        uint32_t p_flags = *(uint32_t *)((unsigned char *)elf_contents + i + 4);
+        uint64_t p_offset = *(uint64_t *)((unsigned char *)elf_contents + i + 8);
+        uint64_t p_vaddr = *(uint64_t *)((unsigned char *)elf_contents + i + 16);
+        uint64_t p_paddr = *(uint64_t *)((unsigned char *)elf_contents + i + 24);
+        uint64_t p_filesz = *(uint64_t *)((unsigned char *)elf_contents + i + 32);
+        uint64_t p_memsz = *(uint64_t *)((unsigned char *)elf_contents + i + 40);
+        uint64_t p_align = *(uint64_t *)((unsigned char *)elf_contents + i + 48);
+
+        unsigned char p_execute = (p_flags & 1);
+        unsigned char p_write = (p_flags & 2) >> 1;
+        unsigned char p_read = (p_flags & 4) >> 2;
+        if (p_type == PT_LOAD) {
+            void *addr = mmap((void *)p_vaddr, p_memsz, (PROT_READ * 1) | (PROT_WRITE * 1 ) | (PROT_EXEC * 1), MAP_ANONYMOUS | MAP_PRIVATE, -1, 0); 
+            if(addr == MAP_FAILED) { 
+                printf("Failed\n"); 
+                exit(13);
+            }
+            memcpy(addr, (unsigned char *)elf_contents + p_offset, p_filesz);
+            mprotect(addr, p_memsz, PROT_EXEC * p_execute | PROT_READ * p_read | PROT_WRITE * p_write);
+        }
+    }
+    printf("test\n");
+    ((void (*)())(*((uint64_t *)((unsigned char *)elf_contents + 24))))();
+    printf("test\n");
 	/**
 	 * TODO: Load PT_LOAD segments
 	 * For minimal syscall-only binaries.
@@ -99,3 +142,4 @@ int main(int argc, char **argv, char **envp)
 	load_and_run(argv[1], argc - 1, &argv[1], envp);
 	return 0;
 }
+
