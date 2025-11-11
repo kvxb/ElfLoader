@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <sys/types.h>
 #define _GNU_SOURCE
 
 #include <stdio.h>
@@ -12,7 +13,7 @@
 #include <fcntl.h>
 
 #define PT_LOAD 1
-
+#define _8MB 8388608
 void *map_elf(const char *filename)
 {
 	// This part helps you store the content of the ELF file inside the buffer.
@@ -88,119 +89,148 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
 	 * Note: Beware of the AT_RANDOM, AT_PHDR entries, the application will crash if you do not set them up properly.
 	 */
 
+    // try without MAP_ANONYMOUS for fun
+    void *sbp = mmap(NULL, _8MB, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-    void *stack_base = mmap(NULL, 8388608, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (stack_base == MAP_FAILED) {
-        perror("mmap stack");
-        exit(14);
-    }
-
-    uint8_t *sp = (uint8_t *)stack_base + 8388608;
-    
+    uint8_t *ssp = (uint8_t *)sbp + _8MB;
     uint64_t e_entry = *((uint64_t *)((unsigned char *)elf_contents + 24));
     uint64_t e_phdr = (uint64_t)elf_contents + e_phoff;
-
-    int envc = 0;
-    while (envp[envc]) envc++;
-
-    size_t total_string_len = 0;
     
-    for (int i = 0; i < argc; i++) {
-        total_string_len += strlen(argv[i]) + 1;
+    uint32_t n_envc = 0;
+    uint32_t s_size = 0;
+    while (envp[n_envc]) {
+        s_size += strlen(envp[n_envc]) + 1;
+        n_envc++;
     }
-    
-    for (int i = 0; i < envc; i++) {
-        total_string_len += strlen(envp[i]) + 1;
+
+    for (uint32_t i = 0; i < argc; i++) {
+        s_size += strlen(argv[i]) + 1;
     }
+
+    s_size += strlen(filename) + 1;
+
+    uint32_t og_s_size = s_size;
+    s_size = (s_size + 15) & ~15;
+
+    // might be wrong 
+    ssp -= s_size;
+
+    for (uint8_t i = 0; i < s_size - og_s_size; i++) {
+        *(ssp++) = rand() % 256; 
+    }
+
+    uint8_t *c_ssp = ssp;
+    uint8_t **new_argv = malloc((argc + 1) * sizeof(uint8_t *));
     
-    total_string_len += strlen(filename) + 1;
-    
-    total_string_len += 7;
-
-    total_string_len = (total_string_len + 15) & ~15;
-
-    sp -= total_string_len;
-    uint8_t *string_area = sp;
-
-    char **new_argv = alloca((argc + 1) * sizeof(char *));
-    for (int i = 0; i < argc; i++) {
-        size_t len = strlen(argv[i]) + 1;
-        sp -= len;
-        memcpy(sp, argv[i], len);
-        new_argv[i] = (char *)sp;
+    for (uint32_t i = 0; i < argc; i++) {
+        uint32_t len = strlen(argv[i]) + 1;
+        memcpy(c_ssp, argv[i], len);
+        new_argv[i] = (uint8_t *)c_ssp;
+        c_ssp += len;
     }
     new_argv[argc] = NULL;
 
-    char **new_envp = alloca((envc + 1) * sizeof(char *));
-    for (int i = 0; i < envc; i++) {
-        size_t len = strlen(envp[i]) + 1;
-        sp -= len;
-        memcpy(sp, envp[i], len);
-        new_envp[i] = (char *)sp;
+    uint8_t **new_envp = malloc((n_envc + 1) * sizeof(uint8_t *));
+    for (uint32_t i = 0; i < n_envc; i++) {
+        uint32_t len = strlen(envp[i]) + 1;
+        memcpy(c_ssp, envp[i], len);
+        new_envp[i] = (uint8_t *)c_ssp;
+        c_ssp += len;
     }
-    new_envp[envc] = NULL;
+    new_envp[n_envc] = NULL;
 
-    sp -= strlen(filename) + 1;
-    char *execfn_str = (char *)sp;
-    memcpy(sp, filename, strlen(filename) + 1);
+    uint8_t *AT_EXECFN = (uint8_t *)c_ssp;
+    memcpy(c_ssp, filename, strlen(filename) + 1);
 
-    sp -= 7;
-    char *platform_str = (char *)sp;
-    memcpy(sp, "x86_64", 7);
+    // finished the top now we go back with ssp from before we started allocating
+    // strings
 
-    sp -= 16;
-    uint8_t *random_data = sp;
-    for (int i = 0; i < 16; i++) {
-        random_data[i] = rand() % 256;
-    }
+    ssp -= strlen("x86_64\0");
+    uint8_t *AT_PLATFORM = (uint8_t *)ssp;
+    memcpy(ssp, "x86_64", 7);
 
-    sp -= (uint64_t)sp % 16;
-
-    typedef struct {
-        uint64_t key;
-        uint64_t value;
-    } auxv_t;
-
-    auxv_t auxv[] = {
-        {6, 4096},                    // AT_PAGESZ
-        {16, 0xbfebfbff},             // AT_HWCAP
-        {17, 100},                    // AT_CLKTCK
-        {3, e_phdr},                  // AT_PHDR
-        {4, e_phentsize},             // AT_PHENT
-        {5, e_phnum},                 // AT_PHNUM
-        {7, 0},                       // AT_BASE (0 for non-PIE)
-        {8, 0},                       // AT_FLAGS
-        {9, e_entry},                 // AT_ENTRY
-        {11, getuid()},               // AT_UID
-        {12, geteuid()},              // AT_EUID
-        {13, getgid()},               // AT_GID
-        {14, getegid()},              // AT_EGID
-        {23, 0},                      // AT_SECURE
-        {25, (uint64_t)random_data},  // AT_RANDOM
-        {15, (uint64_t)platform_str}, // AT_PLATFORM
-        {31, (uint64_t)execfn_str},   // AT_EXECFN
-        {0, 0}                        // AT_NULL
-    };
-
-    for (int i = sizeof(auxv)/sizeof(auxv[0]) - 1; i >= 0; i--) {
-        sp -= 8;
-        *((uint64_t *)sp) = auxv[i].value;
-        sp -= 8;
-        *((uint64_t *)sp) = auxv[i].key;
+    ssp -= 16;
+    uint8_t *AT_RANDOM = ssp;
+    for (uint32_t i = 0; i < 16; i++) {
+        AT_RANDOM[i] = rand() % 256;
     }
 
-    for (int i = envc; i >= 0; i--) {
-        sp -= 8;
-        *((uint64_t *)sp) = (uint64_t)new_envp[i];
+    ssp -= (uint64_t)ssp % 16;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+
+    ssp -= 8; *((uint64_t *)ssp) = (uint64_t)AT_PLATFORM;
+    ssp -= 8; *((uint64_t *)ssp) = 15;
+
+    ssp -= 8; *((uint64_t *)ssp) = (uint64_t)AT_EXECFN;
+    ssp -= 8; *((uint64_t *)ssp) = 31;
+
+    ssp -= 8; *((uint64_t *)ssp) = (uint64_t)AT_RANDOM;
+    ssp -= 8; *((uint64_t *)ssp) = 25;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    ssp -= 8; *((uint64_t *)ssp) = 23;
+
+    ssp -= 8; *((uint64_t *)ssp) = getegid();
+    ssp -= 8; *((uint64_t *)ssp) = 14;
+
+    ssp -= 8; *((uint64_t *)ssp) = getgid();
+    ssp -= 8; *((uint64_t *)ssp) = 13;
+
+    ssp -= 8; *((uint64_t *)ssp) = geteuid();
+    ssp -= 8; *((uint64_t *)ssp) = 12;
+
+    ssp -= 8; *((uint64_t *)ssp) = getuid();
+    ssp -= 8; *((uint64_t *)ssp) = 11;
+
+    ssp -= 8; *((uint64_t *)ssp) = e_entry;
+    ssp -= 8; *((uint64_t *)ssp) = 9;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    ssp -= 8; *((uint64_t *)ssp) = 8;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    ssp -= 8; *((uint64_t *)ssp) = 7;
+
+    ssp -= 8; *((uint64_t *)ssp) = e_phnum;
+    ssp -= 8; *((uint64_t *)ssp) = 5;
+
+    ssp -= 8; *((uint64_t *)ssp) = e_phentsize;
+    ssp -= 8; *((uint64_t *)ssp) = 4;
+
+    ssp -= 8; *((uint64_t *)ssp) = e_phdr;
+    ssp -= 8; *((uint64_t *)ssp) = 3;
+
+    ssp -= 8; *((uint64_t *)ssp) = 100;
+    ssp -= 8; *((uint64_t *)ssp) = 17;
+
+    ssp -= 8; *((uint64_t *)ssp) = 4096;
+    ssp -= 8; *((uint64_t *)ssp) = 6;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0xbfebfbff;
+    ssp -= 8; *((uint64_t *)ssp) = 16;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0x7fff6c86b000;
+    ssp -= 8; *((uint64_t *)ssp) = 33;
+
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    for (int i = 0; i < n_envc; i++) {
+        ssp -= 8;
+        *((uint64_t *)ssp) = (uint64_t)new_envp[i];
     }
 
-    for (int i = argc; i >= 0; i--) {
-        sp -= 8;
-        *((uint64_t *)sp) = (uint64_t)new_argv[i];
+    ssp -= 8; *((uint64_t *)ssp) = 0;
+    for (int i = 0; i < argc; i++) {
+        ssp -= 8;
+        *((uint64_t *)ssp) = (uint64_t)new_argv[i];
     }
 
-    sp -= 8;
-    *((uint64_t *)sp) = argc;
+    ssp -= 8;
+    *((uint64_t *)ssp) = argc;
+    
+    free(new_argv);
+    free(new_envp);
 
     void (*entry)() = (void (*)())e_entry;
     //void (*entry)() = (void (*)())(*((uint64_t *)((unsigned char *)elf_contents + 24)));
@@ -219,7 +249,7 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
 			"xor %%rbp, %%rbp\n"
 			"jmp *%1\n"
 			:
-			: "r"(sp), "r"(entry)
+			: "r"(ssp), "r"(entry)
 			: "memory"
 			);
 }
@@ -234,4 +264,5 @@ int main(int argc, char **argv, char **envp)
 	load_and_run(argv[1], argc - 1, &argv[1], envp);
 	return 0;
 }
+
 
