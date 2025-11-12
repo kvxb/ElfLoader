@@ -43,7 +43,6 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
 {
 	// Contents of the ELF file are in the buffer: elf_contents[x] is the x-th byte of the ELF file.
 	void *elf_contents = map_elf(filename);
-
 	if (memcmp(elf_contents, "\177ELF", 4)) {
         fprintf(stderr, "Not a valid ELF file\n");
         exit(3);
@@ -104,7 +103,7 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
     uint8_t *AT_EXECFN = (uint8_t *)sp;
     memcpy(sp, filename, strlen(filename) + 1);
 
-    uint8_t **new_argv = malloc((argc + 1) * sizeof(uint8_t *));
+    uint8_t **new_argv = malloc((argc) * sizeof(uint8_t *));
     for (int32_t i = argc - 1; i >= 0; i--) {
         uint32_t len = strlen(argv[i]) + 1;
         sp -= len;
@@ -121,7 +120,7 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
         new_envp[i] = (uint8_t *)sp;
     }
     new_envp[n_envc] = NULL;
-
+    sp--;
     while ((uint64_t)sp % 16 != 0) {
         *(sp--) = rand() % 256;
     }
@@ -195,12 +194,11 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
     sp -= 8; *((uint64_t *)sp) = 16;
 
     sp -= 8; *((uint64_t *)sp) = 0;
-    
+
     for (int32_t i = n_envc - 1; i >= 0; i--) {
         sp -= 8;
         *((uint64_t *)sp) = (uint64_t)new_envp[i];
     }
-
 
     sp -= 8; *((uint64_t *)sp) = 0;
     for (int32_t i = argc - 1; i >= 0; i--) {
@@ -209,7 +207,6 @@ void load_and_run(const char *filename, int argc, char **argv, char **envp)
     }
 
     sp -= 8; *((uint64_t *)sp) = argc;
-    printf("7\n");
 
     free(new_argv);
     free(new_envp);
